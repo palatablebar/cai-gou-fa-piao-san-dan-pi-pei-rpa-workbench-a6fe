@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.config.settings import settings
 from src.constants.enums import (
+    BatchVersionStatus,
     CASE_STATUS_LABELS,
     CASE_STATUS_ORDER,
     DIFF_STATUSES,
@@ -21,6 +22,7 @@ from src.constants.enums import (
 )
 from src.models.goods_receipt import GoodsReceipt
 from src.models.invoice import Invoice
+from src.models.match_batch import MatchBatch, MatchBatchVersion
 from src.models.match_case import MatchCase
 from src.models.match_run import MatchRun
 from src.models.purchase_order import PurchaseOrder
@@ -55,6 +57,16 @@ def overview(db: Session) -> dict:
     )
     runs_total = db.scalar(select(func.count()).select_from(MatchRun)) or 0
     latest_run = db.scalar(select(MatchRun).order_by(MatchRun.id.desc()).limit(1))
+    # 关账口径取正式版运行：暂存版（待切换）不进入总览统计
+    official_run = db.scalar(
+        select(MatchRun)
+        .join(MatchBatchVersion, MatchBatchVersion.run_id == MatchRun.id)
+        .where(MatchBatchVersion.status == BatchVersionStatus.OFFICIAL.value)
+        .order_by(MatchRun.id.desc())
+        .limit(1)
+    )
+    if official_run is not None:
+        latest_run = official_run
     run_id = latest_run.id if latest_run else None
 
     case_stmt = select(MatchCase).where(MatchCase.match_status.in_(DIFF_STATUSES))
@@ -94,6 +106,25 @@ def overview(db: Session) -> dict:
         trend.append({"date": day.isoformat(), "runs": count})
 
     period = latest_run.period if latest_run else default_period(db)
+    batch = db.scalar(
+        select(MatchBatch).where(MatchBatch.period == period).order_by(MatchBatch.id.desc()).limit(1)
+    )
+    batch_payload = None
+    if batch is not None:
+        official = db.get(MatchBatchVersion, batch.official_version_id) if batch.official_version_id else None
+        staging = db.get(MatchBatchVersion, batch.staging_version_id) if batch.staging_version_id else None
+        batch_payload = {
+            "id": batch.id,
+            "batch_no": batch.batch_no,
+            "period": batch.period,
+            "status": batch.status,
+            "watermark_label": batch.watermark_label,
+            "source_counts": batch.source_counts or {},
+            "official_version_no": official.version_no if official else None,
+            "official_diffs": (official.counts or {}).get("diffs") if official else None,
+            "staging_version_no": staging.version_no if staging else None,
+            "staging_affected": (staging.change_summary or {}).get("affected") if staging else None,
+        }
     return {
         "period": period,
         "suppliers_total": suppliers_total,
@@ -108,6 +139,7 @@ def overview(db: Session) -> dict:
         "diff_total": len(cases),
         "diff_amount_total": yuan_from_cents(total_diff_cents),
         "worker_alive": worker_alive(),
+        "batch": batch_payload,
         "latest_run": {
             "id": latest_run.id,
             "run_no": latest_run.run_no,

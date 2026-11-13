@@ -16,6 +16,9 @@ router = APIRouter(prefix="/match-cases", tags=["match-cases"])
 @router.get("")
 def list_cases(
     run_id: int | None = None,
+    batch_id: int | None = None,
+    version_id: int | None = None,
+    scope: str = Query("official", pattern=r"^(official|all)$"),
     match_status: str | None = None,
     diff_type: str | None = None,
     status: str | None = None,
@@ -32,6 +35,9 @@ def list_cases(
         db,
         principal,
         run_id=run_id,
+        batch_id=batch_id,
+        version_id=version_id,
+        scope=scope,
         match_status=match_status,
         diff_type=diff_type,
         status=status,

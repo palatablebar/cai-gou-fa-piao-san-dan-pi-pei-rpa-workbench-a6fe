@@ -5,6 +5,7 @@ import { errorMessage, esc, toast } from './ui.js';
 import loginPage from './pages/login.js';
 import overviewPage from './pages/overview.js';
 import documentsPage from './pages/documents.js';
+import batchesPage from './pages/batches.js';
 import runsPage from './pages/runs.js';
 import casesPage from './pages/cases.js';
 import adjustmentsPage from './pages/adjustments.js';
@@ -13,6 +14,7 @@ import auditPage from './pages/audit.js';
 const routes = [
   { path: '#/overview', page: overviewPage, permission: 'overview:read' },
   { path: '#/documents', page: documentsPage, permission: 'invoice:read' },
+  { path: '#/batches', page: batchesPage, permission: 'run:read' },
   { path: '#/runs', page: runsPage, permission: 'run:read' },
   { path: '#/cases', page: casesPage, permission: 'case:read' },
   { path: '#/adjustments', page: adjustmentsPage, permission: 'case:read' },

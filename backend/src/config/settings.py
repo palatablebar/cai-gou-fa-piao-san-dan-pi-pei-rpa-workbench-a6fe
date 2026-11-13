@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     app_name: str = "invoice3way"
     app_title: str = "采购发票三单匹配 RPA 工作台"
 
-    db_kind: str = "postgres"  # postgres | mysql
+    db_kind: str = "postgres"  # postgres | mysql | sqlite
+    # 显式连接串（优先级最高；测试 / 本地 sqlite 使用）
+    db_url: str | None = None
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "invoice3way"
@@ -31,6 +33,8 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.db_url:
+            return self.db_url
         if self.db_kind == "mysql":
             return (
                 f"mysql+pymysql://{self.db_user}:{self.db_password}"

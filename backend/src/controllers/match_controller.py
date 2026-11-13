@@ -9,12 +9,17 @@ from src.services import audit_service, match_service
 
 
 def create_run(db: Session, payload: dict, principal: dict, request: Request) -> dict:
-    run = match_service.create_and_execute(
+    """发起匹配：默认走账期批次（幂等批次键），同一批次重试不新增运行/单据。"""
+    batch, version, reused = match_service.open_batch_and_run(
         db,
         period=payload.get("period"),
+        batch_key=payload.get("batch_key"),
         trigger=payload.get("trigger") or "manual",
         operator_email=principal["email"],
+        remark=payload.get("remark"),
+        force=bool(payload.get("force")),
     )
+    run = match_service.get_run(db, version.run_id)
     audit_service.record(
         db,
         actor_email=principal["email"],
@@ -22,7 +27,15 @@ def create_run(db: Session, payload: dict, principal: dict, request: Request) ->
         action="run.create",
         entity="match_run",
         entity_id=run.id,
-        detail={"run_no": run.run_no, "period": run.period, "status": run.status},
+        detail={
+            "run_no": run.run_no,
+            "period": run.period,
+            "status": run.status,
+            "batch_no": batch.batch_no,
+            "version_no": version.version_no,
+            "watermark": run.watermark,
+            "reused": reused,
+        },
         ip=request.client.host if request.client else None,
     )
     audit_service.record(
@@ -42,7 +55,18 @@ def create_run(db: Session, payload: dict, principal: dict, request: Request) ->
         ip=request.client.host if request.client else None,
     )
     db.commit()
-    return match_service.serialize_run(run)
+    result = match_service.serialize_run(run)
+    result.update(
+        {
+            "batch_id": batch.id,
+            "batch_no": batch.batch_no,
+            "version_id": version.id,
+            "version_no": version.version_no,
+            "version_status": version.status,
+            "reused": reused,
+        }
+    )
+    return result
 
 
 def list_runs(db: Session, **filters) -> dict:
@@ -55,6 +79,8 @@ def get_run(db: Session, run_id: int) -> dict:
 
 def list_cases(db: Session, principal: dict, **filters) -> dict:
     filters["show_price"] = principal["role"] != Role.VIEWER.value
+    # 工作台默认只看正式版：上一版已处理的差异不会和新结果同时出现在待办里
+    filters.setdefault("scope", "official")
     return match_service.list_cases(db, **filters)
 
 
@@ -92,5 +118,5 @@ def review_case(db: Session, case_id: int, payload: dict, principal: dict, reque
     return match_service.serialize_case(case)
 
 
-def adjustments(db: Session) -> dict:
-    return match_service.adjustments(db)
+def adjustments(db: Session, *, scope: str = "official") -> dict:
+    return match_service.adjustments(db, scope=scope)

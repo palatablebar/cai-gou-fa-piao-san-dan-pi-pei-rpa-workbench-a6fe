@@ -16,10 +16,11 @@ def cases_csv(
     request: Request,
     run_id: int | None = Query(default=None),
     status: str | None = Query(default=None),
+    batch_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_roles(*EXPORT_ROLES)),
 ):
-    return export_controller.cases_csv(db, run_id, status, principal, request)
+    return export_controller.cases_csv(db, run_id, status, principal, request, batch_id=batch_id)
 
 
 @router.get("/adjustments.csv")

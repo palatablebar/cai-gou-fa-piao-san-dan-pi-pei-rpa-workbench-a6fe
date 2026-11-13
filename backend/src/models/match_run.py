@@ -19,6 +19,11 @@ class MatchRun(Base):
     trigger: Mapped[str] = mapped_column(String(20), default="manual")
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     operator_email: Mapped[str] = mapped_column(String(160), default="system")
+    # 归属批次 / 版本；历史遗留运行两列为空
+    batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 本次运行取数的来源水位（sha256 指纹前 64 位）
+    watermark: Mapped[str] = mapped_column(String(64), default="")
     invoice_raw_count: Mapped[int] = mapped_column(Integer, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, default=0)
     matched_count: Mapped[int] = mapped_column(Integer, default=0)

@@ -16,6 +16,11 @@ class MatchCase(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("match_runs.id", ondelete="CASCADE"), index=True)
+    # 账期批次 / 版本归属；同一发票的人工处理随 case_key 跨版本跟随
+    batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 本行相对上一正式版（或上一暂存版）的变化：new / changed / unchanged / removed
+    change_kind: Mapped[str] = mapped_column(String(16), default="unchanged", index=True)
     case_key: Mapped[str] = mapped_column(String(160))  # invoice_no#import_batch
     invoice_no: Mapped[str] = mapped_column(String(40), index=True)
     import_batch: Mapped[str] = mapped_column(String(60), default="")

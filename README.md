@@ -51,6 +51,23 @@ SRM / WMS / 发票平台的导出数据先进「单据中心」，由后端做**
   重复来自两个采集批次重复导入）；
 - 差异额带符号；建议按判定与差异方向映射（见 `suggest_for`）。
 
+## 3.1 账期批次（可恢复的重算单元）
+
+每个账期一组「批次（`match_batches`）+ 版本（`match_batch_versions`）」，取代每天新开一次裸运行：
+
+| 能力 | 实现 |
+| --- | --- |
+| 幂等重试 | 批次幂等键 `batch_key`（缺省 `period:<账期>`）；同一水位重放直接复用暂存版 / 正式版，不新建运行、不新增工单 |
+| 迟到发票 | 水位（来源单据指纹）变化才生成新版本；按 `case_key = invoice_no#import_batch` 与上一正式版比对，只有受影响差异标 `new` / `changed`，其余 `unchanged`，退出批次的标 `removed` |
+| 人工处理跟随 | 同一批次历史版本里的 `status / reviewer / note` 按 `case_key` 继承到新版本，重算不丢处理意见 |
+| 同一水位核对 | 来源单据（供应商 / 订单 / 收货 / 发票指纹）、匹配结果汇总、差异工单、审计事件数量四类必须与版本快照一致，任何一项不符即拒绝切换 |
+| 一次性切换 | `POST /match-batches/{id}/switch` 在 savepoint 内把暂存版置为正式版、上一正式版置为 `superseded`；异常时回滚，批次转 `failed` 并保留上一正式版 |
+| 显式回滚 | `POST /match-batches/{id}/rollback` 切回上一正式版，两个版本及其工单、审计记录全部保留 |
+| 工作台口径 | 差异工作台 / 调整单 / 导出默认只取「正式版」工单（`scope=official`），暂存版结果不会混进关账待办 |
+
+水位号形如 `WM-202610-<指纹前12位>`，来源计数（订单 / 收货 / 有效发票 / 归一失败）随版本快照落库。
+页面 `#/batches` 展示批次状态、水位、正式版、待切换版与前后差异；切换失败的批次显示 `failed` 并恢复上一版。
+
 ## 4. 页面
 
 | 路由 | 页面 | 说明 |
@@ -58,7 +75,8 @@ SRM / WMS / 发票平台的导出数据先进「单据中心」，由后端做**
 | `#/login` | 登录（凭证封面） | 双规线 + 打孔边 + 复写联标记 |
 | `#/overview` | 总览 | 本期单据量、差异结构、处理进度、最近运行、worker 心跳 |
 | `#/documents` | 单据中心 | 供应商 / 订单 / 收货单 / 发票四个页签，主管可导入，供应商页可改容差 |
-| `#/runs` | 匹配运行 | 发起匹配、运行指标与日志 |
+| `#/batches` | 账期批次 | 批次状态 / 来源水位 / 正式版 / 前后差异；核对后切换、失败回滚 |
+| `#/runs` | 匹配运行 | 发起匹配（落到批次版本）、运行指标与日志 |
 | `#/cases` | 差异工作台 | 判定/处理状态/运行筛选，抽屉处理为退回重开/挂账/接受 |
 | `#/adjustments` | 调整单与导出 | 处理结果汇总 + 三类 CSV 导出（仅主管） |
 | `#/audit` | 审计日志 | 仅主管 |
@@ -72,6 +90,9 @@ GET  /suppliers                  POST /suppliers        PATCH /suppliers/{id}
 GET  /orders                     POST /orders
 GET  /receipts                   POST /receipts
 GET  /invoices                   POST /invoices
+GET  /match-batches              POST /match-batches     GET /match-batches/{id}
+GET  /match-batches/{id}/changes GET  /match-batches/{id}/verify
+POST /match-batches/{id}/recompute  POST /match-batches/{id}/switch  POST /match-batches/{id}/rollback
 GET  /match-runs                 POST /match-runs       GET /match-runs/{id}
 GET  /match-cases                GET  /match-cases/adjustments
 GET  /match-cases/{id}           PATCH /match-cases/{id}/review
@@ -84,6 +105,9 @@ GET  /audit                      GET  /health
 | 枚举 | 后端 | 前端 |
 | --- | --- | --- |
 | `match_status` / `MATCH_STATUS_LABELS` | `backend/src/constants/enums.py` | `frontend/site/js/config.js` → `ENUMS.matchStatus` |
+| `batch_status` / `BATCH_STATUS_LABELS` | `enums.py` | `config.js` → `ENUMS.batchStatus` |
+| `batch_version_status` / `BATCH_VERSION_STATUS_LABELS` | `enums.py` | `config.js` → `ENUMS.batchVersionStatus` |
+| `change_kind` / `CHANGE_KIND_LABELS` | `enums.py` | `config.js` → `ENUMS.changeKind` |
 | `diff_type` / `DIFF_TYPE_LABELS` | `enums.py` + `MATCH_DIFF_TYPE` | `config.js` → `ENUMS.diffType` |
 | `suggestion` / `SUGGESTION_LABELS` | `enums.py` | `config.js` → `ENUMS.suggestion` |
 | `case_status` / `CASE_STATUS_LABELS` | `enums.py` | `config.js` → `ENUMS.caseStatus` |
@@ -108,8 +132,9 @@ SEED_DETAIL period=2026-10 orders=180 receipts=210 invoices=190 rejected=5 match
 > `sources` 键沿用批次固定契约，本项目映射为「供应商档案数」。
 
 幂等：`users.email` / `suppliers.code` / `purchase_orders.po_no` / `goods_receipts.grn_no` /
-`invoices(invoice_no, import_batch)` / `match_runs.seed_key` / `match_cases(run_id, case_key)`
-为自然键 upsert，重复执行不新增、不覆盖人工处理状态。
+`invoices(invoice_no, import_batch)` / `match_batches.batch_key`（`seed-run-2026-10`）/
+`match_cases(run_id, case_key)` 为自然键 upsert，重复执行不新增、不覆盖人工处理状态。
+seed 运行挂在初始化批次下并直接作为正式版（`v1`）。
 
 ## 8. 本地运行
 
@@ -128,7 +153,8 @@ open http://localhost:18203
 ```
 backend/src/{config,constants,controllers,middlewares,models,routes,schemas,services,utils}
 backend/scripts/{seed_demo.py,demo_config.py,worker_healthcheck.sh}
-backend/tests/{test_normalization.py,test_matching.py,test_security.py}
+backend/tests/{test_normalization.py,test_matching.py,test_security.py,test_batches.py}
+backend/migrations/{001_core_tables.sql,002_match_batches.sql}
 frontend/site/{index.html,css/{tokens,app}.css,js/{config,api,store,ui,app}.js,js/pages/*.js}
 ```
 

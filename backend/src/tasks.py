@@ -5,6 +5,7 @@ import time
 
 from src.config.celery_app import TASK_DAILY, TASK_HEARTBEAT, celery_app
 from src.config.settings import settings
+from src.services import match_service
 from src.utils.logger import get_logger
 
 logger = get_logger("tasks")
@@ -28,17 +29,21 @@ def heartbeat() -> str:
 
 @celery_app.task(name=TASK_DAILY)
 def daily_match() -> dict:
-    """每日 07:40 对本账期重跑一次匹配（新导入的发票会自动进入结果）。"""
+    """每日 07:40 对本账期重算一次匹配（迟到发票并入后只更新受影响的差异）。
+
+    走账期批次的默认幂等键：同一水位不会新增运行，新发票才产生新版本。
+    """
     from src.config.database import session_scope
-    from src.services import audit_service, match_service
+    from src.services import audit_service, batch_service
 
     with session_scope() as db:
         period = match_service.default_period(db)
-        run = match_service.create_and_execute(
+        batch, version, reused = batch_service.open_and_recompute(
             db,
             period=period,
+            batch_key=f"period:{period}",
+            operator="scheduler@" + settings.app_name + ".io",
             trigger="schedule",
-            operator_email="scheduler@" + settings.app_name + ".io",
         )
         audit_service.record(
             db,
@@ -46,9 +51,20 @@ def daily_match() -> dict:
             actor_role="admin",
             action="run.create",
             entity="match_run",
-            entity_id=run.id,
-            detail={"trigger": "schedule", "run_no": run.run_no, "period": run.period},
+            entity_id=version.run_id,
+            detail={
+                "trigger": "schedule",
+                "batch_no": batch.batch_no,
+                "version_no": version.version_no,
+                "reused": reused,
+            },
             layer="worker",
         )
-    logger.info("daily match finished: %s", run.run_no)
-    return {"run_no": run.run_no, "period": period, "diffs": run.diff_count}
+    logger.info("daily match finished: %s v%s reused=%s", batch.batch_no, version.version_no, reused)
+    return {
+        "batch_no": batch.batch_no,
+        "version_no": version.version_no,
+        "period": period,
+        "diffs": (version.counts or {}).get("diffs", 0),
+        "reused": reused,
+    }

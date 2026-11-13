@@ -8,8 +8,15 @@ from src.services import audit_service, export_service
 from src.utils.csv_export import csv_response_headers
 
 
-def cases_csv(db: Session, run_id: int | None, status: str | None, principal: dict, request: Request) -> Response:
-    content = export_service.cases_csv(db, run_id, status)
+def cases_csv(
+    db: Session,
+    run_id: int | None,
+    status: str | None,
+    principal: dict,
+    request: Request,
+    batch_id: int | None = None,
+) -> Response:
+    content = export_service.cases_csv(db, run_id, status, batch_id=batch_id)
     audit_service.record(
         db,
         actor_email=principal["email"],
@@ -17,7 +24,7 @@ def cases_csv(db: Session, run_id: int | None, status: str | None, principal: di
         action="export.cases",
         entity="match_case",
         entity_id=run_id,
-        detail={"bytes": len(content), "status": status},
+        detail={"bytes": len(content), "status": status, "batch_id": batch_id},
         ip=request.client.host if request.client else None,
     )
     db.commit()

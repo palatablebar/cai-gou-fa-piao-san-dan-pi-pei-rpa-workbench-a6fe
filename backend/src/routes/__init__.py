@@ -6,6 +6,7 @@ from src.routes.auth import router as auth_router
 from src.routes.exports import router as exports_router
 from src.routes.health import router as health_router
 from src.routes.invoices import router as invoices_router
+from src.routes.match_batches import router as match_batches_router
 from src.routes.match_cases import router as match_cases_router
 from src.routes.match_runs import router as match_runs_router
 from src.routes.orders import router as orders_router
@@ -21,6 +22,7 @@ api_router.include_router(suppliers_router)
 api_router.include_router(orders_router)
 api_router.include_router(receipts_router)
 api_router.include_router(invoices_router)
+api_router.include_router(match_batches_router)
 api_router.include_router(match_runs_router)
 api_router.include_router(match_cases_router)
 api_router.include_router(exports_router)

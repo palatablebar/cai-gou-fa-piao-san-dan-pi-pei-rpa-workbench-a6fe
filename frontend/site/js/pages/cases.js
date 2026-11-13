@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { ENUMS, can, caseTone, statusTone } from '../config.js';
 import { drawer, emptyState, errorBox, errorMessage, esc, field, fmtTime, kv, table, toast } from '../ui.js';
 
-const state = { runId: '', matchStatus: '', status: '', q: '', onlyDiffs: true };
+const state = { runId: '', batchId: '', scope: 'official', matchStatus: '', status: '', q: '', onlyDiffs: true };
 
 function money(value) {
   if (value === null || value === undefined) return '—';
@@ -26,6 +26,9 @@ function openCase(view, ctx, item) {
       ['数量 订单 / 收货', `<span class="mono">${item.qty_ordered} / ${item.qty_received}</span>`],
       ['发票税率 / 订单税率', `<span class="mono">${esc(item.payload.invoice_tax_rate_label || '—')} / ${esc(item.payload.po_tax_rate_label || '—')}</span>`],
       ['处理状态', `<span class="badge ${caseTone(item.status)}">${esc(ENUMS.caseStatus[item.status] || item.status)}</span>`],
+      ['版本变化', item.version_id
+        ? `${item.version_label ? `<span class="mono">${esc(item.version_label)}</span> ` : ''}<span class="badge ${item.change_kind === 'unchanged' ? 'info' : 'warn'}">${esc(ENUMS.changeKind[item.change_kind] || item.change_kind || '未变化')}</span>`
+        : '<span class="muted">历史运行（无批次版本）</span>'],
       ['处理人', esc(item.reviewer || '—')],
       ['备注', esc(item.note || '—')],
       ['生成时间', fmtTime(item.created_at)],
@@ -65,12 +68,17 @@ function openCase(view, ctx, item) {
 export const casesPage = {
   async render(view, ctx) {
     state.runId = ctx.query.run_id || state.runId;
+    state.batchId = ctx.query.batch_id || state.batchId;
+    if (ctx.query.scope) state.scope = ctx.query.scope;
     let data;
     let runs;
+    let batches;
     try {
-      [data, runs] = await Promise.all([
+      [data, runs, batches] = await Promise.all([
         api.get('/api/match-cases', {
           run_id: state.runId,
+          batch_id: state.batchId,
+          scope: state.scope,
           match_status: state.matchStatus,
           status: state.status,
           q: state.q,
@@ -78,6 +86,7 @@ export const casesPage = {
           limit: 80,
         }),
         api.get('/api/match-runs', { limit: 20 }),
+        api.get('/api/match-batches', { limit: 20 }),
       ]);
     } catch (err) {
       view.innerHTML = errorBox(errorMessage(err));
@@ -89,12 +98,14 @@ export const casesPage = {
         <div class="panel-head">
           <h2>差异工作台</h2>
           <div style="display:flex;gap:8px;align-items:center">
-            <span class="meta">${data.total} 条</span>
+            <span class="meta">${data.total} 条 · ${state.scope === 'official' ? '正式版' : '全部版本'}</span>
             ${can(ctx.user.role, 'export:read') ? '<button class="btn sm seal" id="export-cases">导出 CSV</button>' : ''}
           </div>
         </div>
         <div class="panel-body">
           <div class="filter-bar" id="case-filters">
+            ${field({ label: '批次', name: 'batch_id', value: state.batchId, options: [{ value: '', label: '全部批次' }, ...batches.items.map((batch) => ({ value: batch.id, label: `${batch.batch_no}（${ENUMS.batchStatus[batch.status] || batch.status}）` }))] })}
+            ${field({ label: '版本范围', name: 'scope', value: state.scope, options: [{ value: 'official', label: '只看正式版' }, { value: 'all', label: '含暂存版 / 历史版' }] })}
             ${field({ label: '运行', name: 'run_id', value: state.runId, options: [{ value: '', label: '全部运行' }, ...runs.items.map((run) => ({ value: run.id, label: `${run.run_no}（${run.period}）` }))] })}
             ${field({ label: '判定', name: 'match_status', value: state.matchStatus, options: [{ value: '', label: '全部判定' }, ...Object.entries(ENUMS.matchStatus).map(([value, label]) => ({ value, label }))] })}
             ${field({ label: '处理状态', name: 'status', value: state.status, options: [{ value: '', label: '全部处理' }, ...Object.entries(ENUMS.caseStatus).map(([value, label]) => ({ value, label }))] })}
@@ -114,6 +125,7 @@ export const casesPage = {
                   { key: 'diff_amount', label: '差异额', className: 'num', render: (row) => (row.diff_amount_cents ? money(row.diff_amount) : '—') },
                   { key: 'suggestion', label: '建议', render: (row) => esc(ENUMS.suggestion[row.suggestion] || row.suggestion) },
                   { key: 'status', label: '处理', render: (row) => `<span class="badge ${caseTone(row.status)}">${esc(ENUMS.caseStatus[row.status] || row.status)}</span>` },
+                  { key: 'change_kind', label: '版本', render: (row) => (row.change_kind && row.change_kind !== 'unchanged' ? `<span class="badge warn">${esc(ENUMS.changeKind[row.change_kind] || row.change_kind)}</span>` : '<span class="muted">—</span>') },
                   { key: 'reviewer', label: '处理人', render: (row) => esc(row.reviewer || '—') },
                 ],
               })
@@ -122,6 +134,8 @@ export const casesPage = {
       </section>`;
     const filters = view.querySelector('#case-filters');
     filters?.addEventListener('change', () => {
+      state.batchId = filters.querySelector('[name=batch_id]').value;
+      state.scope = filters.querySelector('[name=scope]').value;
       state.runId = filters.querySelector('[name=run_id]').value;
       state.matchStatus = filters.querySelector('[name=match_status]').value;
       state.status = filters.querySelector('[name=status]').value;

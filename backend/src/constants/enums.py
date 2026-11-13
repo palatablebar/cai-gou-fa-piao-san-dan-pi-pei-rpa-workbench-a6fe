@@ -184,6 +184,90 @@ TRIGGER_LABELS: dict[str, str] = {
 }
 
 
+class BatchStatus(StrEnum):
+    """账期批次状态。
+
+    open     已建档，尚无版本
+    staging  有暂存版待核对 / 待切换
+    official 已切换出正式版
+    failed   切换失败（已回滚）
+    closed   已关账
+    """
+
+    OPEN = "open"
+    STAGING = "staging"
+    OFFICIAL = "official"
+    FAILED = "failed"
+    CLOSED = "closed"
+
+
+BATCH_STATUS_LABELS: dict[str, str] = {
+    BatchStatus.OPEN.value: "已建档",
+    BatchStatus.STAGING.value: "待切换",
+    BatchStatus.OFFICIAL.value: "已切换",
+    BatchStatus.FAILED.value: "切换失败",
+    BatchStatus.CLOSED.value: "已关账",
+}
+
+# 批次可继续推进（重算 / 切换）的状态
+BATCH_ACTIVE_STATUSES: list[str] = [
+    BatchStatus.OPEN.value,
+    BatchStatus.STAGING.value,
+    BatchStatus.OFFICIAL.value,
+    BatchStatus.FAILED.value,
+]
+
+
+class BatchVersionStatus(StrEnum):
+    STAGING = "staging"
+    OFFICIAL = "official"
+    SUPERSEDED = "superseded"
+    ROLLED_BACK = "rolled_back"
+    FAILED = "failed"
+
+
+BATCH_VERSION_STATUS_LABELS: dict[str, str] = {
+    BatchVersionStatus.STAGING.value: "暂存版（未生效）",
+    BatchVersionStatus.OFFICIAL.value: "正式版",
+    BatchVersionStatus.SUPERSEDED.value: "已替代",
+    BatchVersionStatus.ROLLED_BACK.value: "已回滚",
+    BatchVersionStatus.FAILED.value: "切换失败",
+}
+
+
+class ChangeKind(StrEnum):
+    """同一发票在版本间相对上一正式版（无则相对上一暂存版）的变化。"""
+
+    NEW = "new"
+    CHANGED = "changed"
+    UNCHANGED = "unchanged"
+    REMOVED = "removed"
+
+
+CHANGE_KIND_LABELS: dict[str, str] = {
+    ChangeKind.NEW.value: "新增",
+    ChangeKind.CHANGED.value: "判定变化",
+    ChangeKind.UNCHANGED.value: "未变化",
+    ChangeKind.REMOVED.value: "退出本批次",
+}
+
+
+# 视为「差异结论变化」的字段
+CASE_DIFF_FIELDS: tuple[str, ...] = (
+    "match_status",
+    "diff_type",
+    "diff_amount_cents",
+    "invoice_amount_cents",
+    "payable_cents",
+    "unit_price_cents",
+    "qty_ordered",
+    "qty_received",
+    "suggestion",
+    "po_no",
+    "supplier_id",
+)
+
+
 # 允许的增值税率（basis point，1% = 100bp）：1% / 3% / 6% / 9% / 13%
 TAX_RATE_BPS: list[int] = [1300, 900, 600, 300, 100]
 

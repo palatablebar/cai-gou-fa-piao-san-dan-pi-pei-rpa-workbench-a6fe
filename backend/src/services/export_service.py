@@ -14,6 +14,7 @@ from src.constants.enums import (
     DIFF_TYPE_LABELS,
     tax_rate_label,
 )
+from src.models.match_batch import MatchBatch
 from src.models.match_case import MatchCase
 from src.models.match_run import MatchRun
 from src.services.normalization_service import yuan_from_cents
@@ -60,14 +61,30 @@ def _case_row(case: MatchCase, run_no: str, period: str) -> list[object]:
     ]
 
 
-def cases_csv(db: Session, run_id: int | None = None, status: str | None = None) -> bytes:
-    """差异清单：默认只导差异工单（三单一致的行不进应付处理清单）。"""
+def cases_csv(
+    db: Session,
+    run_id: int | None = None,
+    status: str | None = None,
+    *,
+    batch_id: int | None = None,
+    scope: str = "official",
+) -> bytes:
+    """差异清单：默认只导差异工单（三单一致的行不进应付处理清单）。
+
+    默认只导正式版；上一版已处理差异不会进入关账清单。
+    """
+    from src.services.batch_service import official_case_filter
+
     runs = {run.id: run for run in db.scalars(select(MatchRun)).all()}
     stmt = select(MatchCase).where(MatchCase.match_status.in_(DIFF_STATUSES))
     if run_id:
         stmt = stmt.where(MatchCase.run_id == run_id)
+    elif batch_id:
+        stmt = stmt.where(MatchCase.batch_id == batch_id)
     if status:
         stmt = stmt.where(MatchCase.status == status)
+    if scope == "official" and not run_id:
+        stmt = stmt.where(official_case_filter(db))
     cases = db.scalars(stmt.order_by(MatchCase.run_id, MatchCase.id)).all()
     rows = [
         _case_row(case, runs[case.run_id].run_no if case.run_id in runs else "", runs[case.run_id].period if case.run_id in runs else "")
@@ -76,11 +93,16 @@ def cases_csv(db: Session, run_id: int | None = None, status: str | None = None)
     return to_csv(CSV_HEADERS, rows)
 
 
-def adjustments_csv(db: Session) -> bytes:
+def adjustments_csv(db: Session, *, scope: str = "official") -> bytes:
+    from src.services.batch_service import official_case_filter
+
     headers = ["账期", "发票号", "采购订单", "供应商", "匹配判定", "差异额(元)", "处理建议", "处理状态", "处理人", "备注"]
     runs = {run.id: run for run in db.scalars(select(MatchRun)).all()}
+    clauses = [MatchCase.status != "pending", MatchCase.match_status.in_(DIFF_STATUSES)]
+    if scope == "official":
+        clauses.append(official_case_filter(db))
     cases = db.scalars(
-        select(MatchCase).where(MatchCase.status != "pending").order_by(MatchCase.updated_at.desc())
+        select(MatchCase).where(*clauses).order_by(MatchCase.updated_at.desc())
     ).all()
     rows = [
         [

@@ -21,10 +21,11 @@ export const BRAND = {
 export const NAV = [
   { to: '#/overview', no: '01', label: '总览', permission: 'overview:read' },
   { to: '#/documents', no: '02', label: '单据中心', permission: 'invoice:read' },
-  { to: '#/runs', no: '03', label: '匹配运行', permission: 'run:read' },
-  { to: '#/cases', no: '04', label: '差异工作台', permission: 'case:read' },
-  { to: '#/adjustments', no: '05', label: '调整单与导出', permission: 'case:read' },
-  { to: '#/audit', no: '06', label: '审计日志', permission: 'audit:read' },
+  { to: '#/batches', no: '03', label: '账期批次', permission: 'run:read' },
+  { to: '#/runs', no: '04', label: '匹配运行', permission: 'run:read' },
+  { to: '#/cases', no: '05', label: '差异工作台', permission: 'case:read' },
+  { to: '#/adjustments', no: '06', label: '调整单与导出', permission: 'case:read' },
+  { to: '#/audit', no: '07', label: '审计日志', permission: 'audit:read' },
 ];
 
 export const ROLE_LABELS = {
@@ -37,7 +38,8 @@ export const PERMISSIONS = {
   admin: [
     'overview:read', 'supplier:read', 'supplier:write', 'order:read', 'order:write',
     'receipt:read', 'receipt:write', 'invoice:read', 'invoice:write',
-    'run:read', 'run:create', 'case:read', 'case:review', 'export:read', 'audit:read',
+    'run:read', 'run:create', 'case:read', 'case:review', 'batch:switch',
+    'export:read', 'audit:read',
   ],
   analyst: [
     'overview:read', 'supplier:read', 'order:read', 'receipt:read', 'invoice:read', 'invoice:write',
@@ -92,6 +94,26 @@ export const ENUMS = {
   invoiceStatus: {
     valid: '已入池',
     rejected: '归一失败',
+  },
+  batchStatus: {
+    open: '已建档',
+    staging: '待切换',
+    official: '已切换',
+    failed: '切换失败',
+    closed: '已关账',
+  },
+  batchVersionStatus: {
+    staging: '暂存版（未生效）',
+    official: '正式版',
+    superseded: '已替代',
+    rolled_back: '已回滚',
+    failed: '切换失败',
+  },
+  changeKind: {
+    new: '新增',
+    changed: '判定变化',
+    unchanged: '未变化',
+    removed: '退出本批次',
   },
   docKind: {
     supplier: '供应商档案',

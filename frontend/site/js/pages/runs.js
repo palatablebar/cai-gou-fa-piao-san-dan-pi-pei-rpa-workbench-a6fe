@@ -30,19 +30,24 @@ function openRun(view, ctx, run) {
     <pre class="code">${esc(run.log_text || '（无日志）')}</pre>
     <h3 style="margin:14px 0 8px;font-size:0.95rem">指标</h3>
     <pre class="code">${esc(JSON.stringify(metrics, null, 2))}</pre>`,
-    footer: '<button class="btn accent" data-cases>查看本次差异</button>',
+    footer: `<button class="btn accent" data-cases>查看本次差异</button>
+      ${run.batch_id ? `<button class="btn ghost" data-batch>账期批次</button>` : ''}`,
   });
   root.querySelector('[data-cases]')?.addEventListener('click', () => {
-    location.hash = `#/cases?run_id=${run.id}`;
+    location.hash = `#/cases?run_id=${run.id}&scope=all`;
+  });
+  root.querySelector('[data-batch]')?.addEventListener('click', () => {
+    location.hash = '#/batches';
   });
 }
 
 function openCreate(view, ctx) {
   const { root, close } = drawer({
     title: '发起三单匹配',
-    subtitle: '对账期内的已入池发票重算一次；同一运行重跑会保留人工处理状态',
+    subtitle: '提交到账期批次：同一批次键重试不新增运行；迟到发票并入只更新受影响的差异',
     body: `<form id="run-form" style="display:grid;gap:12px">
       ${field({ label: '账期', name: 'period', placeholder: '2026-10（留空=最新发票账期）' })}
+      ${field({ label: '批次键', name: 'batch_key', placeholder: '留空 = period:账期；重试必须带同一个键' })}
       ${field({ label: '触发方式', name: 'trigger', value: 'manual', options: [{ value: 'manual', label: '手动' }, { value: 'schedule', label: '定时补偿' }] })}
       <div class="form-error" id="run-error"></div>
       <button class="btn accent" type="submit">开始匹配</button>
@@ -57,9 +62,14 @@ function openCreate(view, ctx) {
     try {
       const run = await api.post('/api/match-runs', {
         period: form.period.value.trim() || null,
+        batch_key: form.batch_key.value.trim() || null,
         trigger: 'manual',
       });
-      toast(`运行 ${run.run_no} 完成：一致 ${run.matched_count}，差异 ${run.diff_count}`);
+      toast(
+        run.reused
+          ? `批次 ${run.batch_no} 复用 v${run.version_no}（水位未变，未新增运行）`
+          : `运行 ${run.run_no} 完成：一致 ${run.matched_count}，差异 ${run.diff_count}`,
+      );
       close();
       await runsPage.render(view, ctx);
     } catch (err) {
@@ -99,6 +109,7 @@ export const runsPage = {
           empty: { title: '还没有运行记录', hint: '发起一次匹配，50 条差异会进入差异工作台。' },
           columns: [
             { key: 'run_no', label: '运行号', className: 'mono' },
+            { key: 'watermark', label: '水位', className: 'mono', render: (row) => (row.watermark ? esc(row.watermark.slice(0, 12)) : '—') },
             { key: 'period', label: '账期', className: 'mono' },
             { key: 'status', label: '状态', render: (row) => `<span class="badge ${runTone(row.status)}">${esc(ENUMS.runStatus[row.status] || row.status)}</span>` },
             { key: 'trigger', label: '触发', render: (row) => esc(ENUMS.trigger[row.trigger] || row.trigger) },

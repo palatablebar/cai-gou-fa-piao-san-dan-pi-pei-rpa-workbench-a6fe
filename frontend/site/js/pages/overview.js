@@ -8,6 +8,7 @@ export const overviewPage = {
     try {
       const data = await api.get('/api/overview');
       const latest = data.latest_run;
+      const batch = data.batch;
       view.innerHTML = `
         <div class="voucher-head">
           <div class="title">本 期 核 对 汇 总</div>
@@ -17,11 +18,28 @@ export const overviewPage = {
             差异额 <b class="mono">¥${Number(data.diff_amount_total).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</b>
           </div>
         </div>
+        ${
+          batch
+            ? `<section class="panel"><div class="panel-head"><h2>账期批次 · 关账口径</h2>
+                <span class="meta">${esc(batch.batch_no)}</span></div>
+                <div class="panel-body">
+                  <div class="kv">
+                    <dt>批次状态</dt><dd>${esc(ENUMS.batchStatus[batch.status] || batch.status)}</dd>
+                    <dt>来源水位</dt><dd class="mono">${esc(batch.watermark_label)}</dd>
+                    <dt>正式版</dt><dd class="mono">${batch.official_version_no ? `v${batch.official_version_no} · ${batch.official_diffs} 条差异` : '尚未切换'}</dd>
+                    <dt>待切换版</dt><dd>${batch.staging_version_no ? `v${batch.staging_version_no} · 影响 ${batch.staging_affected} 条` : '无'}</dd>
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+                    <button class="btn sm ghost" data-go="#/batches">打开账期批次</button>
+                  </div>
+                </div></section>`
+            : ''
+        }
         ${statStrip([
           { label: '供应商档案', value: data.suppliers_total, hint: `${data.orders_total} 张 PO / ${data.receipts_total} 张 GRN` },
           { label: '本期发票', value: data.invoices_total, hint: `归一失败 ${data.rejected_total} 张（留痕不入池）` },
           { label: '三单一致', value: data.matched_total, hint: latest ? `最近运行 ${latest.run_no}` : '尚未运行' },
-          { label: '差异工单', value: data.cases_total - data.matched_total, hint: `待处理 ${data.pending_total} 条` },
+          { label: '差异工单', value: data.cases_total - data.matched_total, hint: `待处理 ${data.pending_total} 条 · 正式版口径` },
         ])}
         <div class="grid-2">
           <section class="panel">

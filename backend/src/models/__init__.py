@@ -13,6 +13,7 @@ from src.models.purchase_order import PurchaseOrder  # noqa: E402
 from src.models.goods_receipt import GoodsReceipt  # noqa: E402
 from src.models.invoice import Invoice  # noqa: E402
 from src.models.match_run import MatchRun  # noqa: E402
+from src.models.match_batch import MatchBatch, MatchBatchVersion  # noqa: E402
 from src.models.match_case import MatchCase  # noqa: E402
 
 __all__ = [
@@ -24,5 +25,7 @@ __all__ = [
     "GoodsReceipt",
     "Invoice",
     "MatchRun",
+    "MatchBatch",
+    "MatchBatchVersion",
     "MatchCase",
 ]

@@ -1,4 +1,9 @@
-"""匹配运行服务：装配三单数据 -> 调算法 B -> 落 MatchCase -> 汇总指标。"""
+"""匹配运行服务：装配三单数据 -> 调算法 B -> 落 MatchCase -> 汇总指标。
+
+运行既可以直接发起（历史兼容），也可以挂在账期批次版本下（见 batch_service）：
+- 批次版本运行时，按 case_key 继承同批次历史版本的人工处理（status/reviewer/note）；
+- 相对基准版本打 change_kind，供「前后差异」展示。
+"""
 from __future__ import annotations
 
 import time
@@ -37,10 +42,17 @@ from src.utils.timeutil import iso_utc, local_now, utcnow
 # ---------------- 序列化 ----------------
 
 
-def serialize_case(case: MatchCase, *, show_price: bool = True) -> dict:
+def serialize_case(case: MatchCase, *, show_price: bool = True, version_label: str | None = None) -> dict:
+    from src.constants.enums import CHANGE_KIND_LABELS  # 局部导入避免循环依赖
+
     return {
         "id": case.id,
         "run_id": case.run_id,
+        "batch_id": case.batch_id,
+        "version_id": case.version_id,
+        "version_label": version_label,
+        "change_kind": case.change_kind,
+        "change_kind_label": CHANGE_KIND_LABELS.get(case.change_kind, case.change_kind),
         "case_key": case.case_key,
         "invoice_no": case.invoice_no,
         "import_batch": case.import_batch,
@@ -81,6 +93,9 @@ def serialize_run(run: MatchRun) -> dict:
         "period": run.period,
         "trigger": run.trigger,
         "status": run.status,
+        "batch_id": run.batch_id,
+        "version_id": run.version_id,
+        "watermark": run.watermark,
         "operator_email": run.operator_email,
         "invoice_raw_count": run.invoice_raw_count,
         "rejected_count": run.rejected_count,
@@ -168,11 +183,25 @@ def _load_views(db: Session, period: str) -> tuple[list, list, list, dict, list[
     return invoice_views, order_views, receipt_views, tolerances, invoices
 
 
-def _persist_cases(db: Session, run: MatchRun, cases: list[dict], order_tax: dict[str, int]) -> None:
+def _persist_cases(
+    db: Session,
+    run: MatchRun,
+    cases: list[dict],
+    order_tax: dict[str, int],
+    *,
+    batch_id: int | None = None,
+    version_id: int | None = None,
+    base_cases: dict[str, dict] | None = None,
+    carry: dict[str, dict] | None = None,
+) -> None:
     existing = {
         case.case_key: case
         for case in db.scalars(select(MatchCase).where(MatchCase.run_id == run.id)).all()
     }
+    base_cases = base_cases or {}
+    carry = carry or {}
+    from src.constants.enums import CASE_DIFF_FIELDS  # 局部导入：避免与批次服务循环依赖
+
     for item in cases:
         payload = dict(item["payload"])
         payload["po_tax_rate_bp"] = order_tax.get((item.get("po_no") or "").upper())
@@ -180,8 +209,11 @@ def _persist_cases(db: Session, run: MatchRun, cases: list[dict], order_tax: dic
         payload["invoice_tax_rate_label"] = tax_rate_label(payload["tax_rate_bp"])
         case = existing.get(item["case_key"])
         if case is None:
+            inherited = carry.get(item["case_key"]) or {}
             case = MatchCase(
                 run_id=run.id,
+                batch_id=batch_id if batch_id is not None else run.batch_id,
+                version_id=version_id if version_id is not None else run.version_id,
                 case_key=item["case_key"],
                 invoice_no=item["invoice_no"],
                 import_batch=item["import_batch"],
@@ -198,7 +230,10 @@ def _persist_cases(db: Session, run: MatchRun, cases: list[dict], order_tax: dic
                 qty_ordered=item["qty_ordered"],
                 qty_received=item["qty_received"],
                 suggestion=item["suggestion"],
-                status=CaseStatus.PENDING.value,
+                # 同一发票在处理前已有人工意见的，继续跟随（不因重算丢处理）
+                status=inherited.get("status") or CaseStatus.PENDING.value,
+                reviewer=inherited.get("reviewer"),
+                note=inherited.get("note"),
                 payload=payload,
             )
             db.add(case)
@@ -214,10 +249,27 @@ def _persist_cases(db: Session, run: MatchRun, cases: list[dict], order_tax: dic
             case.qty_received = item["qty_received"]
             case.suggestion = item["suggestion"]
             case.payload = payload
+            if batch_id is not None:
+                case.batch_id = batch_id
+            if version_id is not None:
+                case.version_id = version_id
+        base = base_cases.get(item["case_key"])
+        if base is None:
+            case.change_kind = "new"
+        elif any(base.get(name) != item.get(name) for name in CASE_DIFF_FIELDS):
+            case.change_kind = "changed"
+        else:
+            case.change_kind = "unchanged"
     db.flush()
 
 
-def execute_run(db: Session, run: MatchRun) -> MatchRun:
+def execute_run(
+    db: Session,
+    run: MatchRun,
+    *,
+    base_cases: dict[str, dict] | None = None,
+    carry: dict[str, dict] | None = None,
+) -> MatchRun:
     started = time.perf_counter()
     run.status = "running"
     db.flush()
@@ -236,7 +288,16 @@ def execute_run(db: Session, run: MatchRun) -> MatchRun:
             default_tolerance=matching_service.Tolerance(),
         )
         order_tax = {order.po_no: order.tax_rate_bp for order in order_views}
-        _persist_cases(db, run, outcome.cases, order_tax)
+        _persist_cases(
+            db,
+            run,
+            outcome.cases,
+            order_tax,
+            batch_id=run.batch_id,
+            version_id=run.version_id,
+            base_cases=base_cases,
+            carry=carry,
+        )
 
         metrics = outcome.metrics()
         metrics.update(
@@ -285,6 +346,7 @@ def create_and_execute(
     operator_email: str,
     seed_key: str | None = None,
 ) -> MatchRun:
+    """历史兼容入口：直接建运行（不挂批次）。业务入口请走 open_batch_and_run。"""
     if seed_key:
         existing = db.scalar(select(MatchRun).where(MatchRun.seed_key == seed_key))
         if existing is not None:
@@ -301,6 +363,30 @@ def create_and_execute(
     db.add(run)
     db.flush()
     return execute_run(db, run)
+
+
+def open_batch_and_run(
+    db: Session,
+    *,
+    period: str | None,
+    batch_key: str | None,
+    trigger: str,
+    operator_email: str,
+    remark: str | None = None,
+    force: bool = False,
+):
+    """发起匹配的入口：把运行挂到账期批次版本上（唯一入口，避免再产生裸运行）。"""
+    from src.services import batch_service
+
+    return batch_service.open_and_recompute(
+        db,
+        period=period,
+        batch_key=batch_key,
+        operator=operator_email,
+        trigger=trigger,
+        remark=remark,
+        force=force,
+    )
 
 
 def list_runs(db: Session, *, period: str | None, status: str | None, limit: int, offset: int) -> dict:
@@ -333,6 +419,9 @@ def list_cases(
     db: Session,
     *,
     run_id: int | None = None,
+    batch_id: int | None = None,
+    version_id: int | None = None,
+    scope: str = "official",
     match_status: str | None = None,
     diff_type: str | None = None,
     status: str | None = None,
@@ -343,11 +432,20 @@ def list_cases(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
+    from src.services.batch_service import official_case_filter
+
     stmt = select(MatchCase)
     count_stmt = select(func.count()).select_from(MatchCase)
     clauses = []
     if run_id:
         clauses.append(MatchCase.run_id == run_id)
+    if batch_id:
+        clauses.append(MatchCase.batch_id == batch_id)
+    if version_id:
+        clauses.append(MatchCase.version_id == version_id)
+    elif scope == "official" and not run_id:
+        # 默认只看正式版：上一版已处理差异不会和新结果混在工作台里
+        clauses.append(official_case_filter(db))
     if match_status:
         clauses.append(MatchCase.match_status == match_status)
     if diff_type:
@@ -372,12 +470,28 @@ def list_cases(
     rows = db.scalars(
         stmt.order_by(MatchCase.run_id.desc(), MatchCase.id).limit(limit).offset(offset)
     ).all()
+    version_nos = _version_labels(db, {row.version_id for row in rows if row.version_id})
     return {
-        "items": [serialize_case(row, show_price=show_price) for row in rows],
+        "items": [
+            serialize_case(row, show_price=show_price, version_label=version_nos.get(row.version_id))
+            for row in rows
+        ],
         "total": total,
         "limit": limit,
         "offset": offset,
+        "scope": scope,
     }
+
+
+def _version_labels(db: Session, version_ids: set[int]) -> dict[int, str]:
+    if not version_ids:
+        return {}
+    from src.models.match_batch import MatchBatchVersion
+
+    rows = db.execute(
+        select(MatchBatchVersion.id, MatchBatchVersion.version_no).where(MatchBatchVersion.id.in_(version_ids))
+    ).all()
+    return {row[0]: f"v{row[1]}" for row in rows}
 
 
 def get_case(db: Session, case_id: int) -> MatchCase:
@@ -398,11 +512,16 @@ def review_case(db: Session, case: MatchCase, *, status: str, note: str | None, 
     return case
 
 
-def adjustments(db: Session, *, limit: int = 200) -> dict:
-    """调整单汇总：已处理（非待处理）的差异工单，按处理结果分组。"""
+def adjustments(db: Session, *, limit: int = 200, scope: str = "official") -> dict:
+    """调整单汇总：已处理（非待处理）的差异工单，按处理结果分组。默认只看正式版。"""
+    from src.services.batch_service import official_case_filter
+
+    base = [MatchCase.status != CaseStatus.PENDING.value, MatchCase.match_status.in_(DIFF_STATUSES)]
+    if scope == "official":
+        base.append(official_case_filter(db))
     rows = db.scalars(
         select(MatchCase)
-        .where(MatchCase.status != CaseStatus.PENDING.value)
+        .where(*base)
         .order_by(MatchCase.updated_at.desc(), MatchCase.id)
         .limit(limit)
     ).all()
@@ -411,12 +530,13 @@ def adjustments(db: Session, *, limit: int = 200) -> dict:
         grouped.setdefault(row.status, []).append(serialize_case(row))
     totals = db.execute(
         select(MatchCase.status, func.count(), func.sum(MatchCase.diff_amount_cents))
-        .where(MatchCase.status != CaseStatus.PENDING.value)
+        .where(*base)
         .group_by(MatchCase.status)
     ).all()
     return {
         "items": [serialize_case(row) for row in rows],
         "total": len(rows),
+        "scope": scope,
         "groups": [
             {"status": key, "label": CASE_STATUS_LABELS.get(key, key), "count": len(items), "items": items}
             for key, items in grouped.items()

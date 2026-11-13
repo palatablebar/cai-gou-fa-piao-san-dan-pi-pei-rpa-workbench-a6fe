@@ -28,7 +28,7 @@ from src.models.match_run import MatchRun
 from src.models.purchase_order import PurchaseOrder
 from src.models.supplier import Supplier
 from src.models.user import User
-from src.services import match_service, normalization_service as norm, supplier_service
+from src.services import batch_service, normalization_service as norm, supplier_service
 from src.utils.security import hash_password
 
 from scripts.demo_config import (
@@ -198,12 +198,12 @@ def ensure_invoices(db, raw_rows: list[dict], rejected_rows: list[dict]) -> tupl
 
 
 def ensure_run(db) -> MatchRun:
-    return match_service.create_and_execute(
+    """初始化批次：seed_key 即批次幂等键；重复执行复用正式版，不新增运行/工单。"""
+    return batch_service.ensure_seed_batch(
         db,
         period=SEED_RUN["period"],
-        trigger=SEED_RUN["trigger"],
-        operator_email=SEED_RUN["operator"],
         seed_key=SEED_RUN["seed_key"],
+        operator=SEED_RUN["operator"],
     )
 
 
